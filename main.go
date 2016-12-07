@@ -16,7 +16,9 @@ import (
 )
 
 var (
-	debug = false
+	debug           = false
+	deployTemplate  *template.Template
+	requestTemplate *template.Template
 )
 
 // SingularityConfig ...
@@ -305,6 +307,58 @@ func checkJSON(b []byte) error {
 	return nil
 }
 
+func init() {
+	var err error
+	requestTemplate, err = template.New("Request template").Parse(SingularityRequestTemplate)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Fatal("Unable to parse the request template")
+	}
+	deployTemplate, err = template.New("Deploy template").Parse(SingularityDeployTemplate)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Fatal("Unable to parse the deploy template")
+	}
+}
+
+func process(tmpl *template.Template, singularityConfig SingularityConfig, filename string) error {
+	var jsonOutput = new(bytes.Buffer)
+
+	// Create the JSON
+	err := tmpl.Execute(jsonOutput, singularityConfig)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("Unable to execute the template")
+		return err
+	}
+	log.WithFields(log.Fields{
+		"json": jsonOutput.String(),
+	}).Debug("Generated JSON")
+
+	// Check that the JSON is valid.
+	err = checkJSON(jsonOutput.Bytes())
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("Invalid request JSON")
+		return err
+	}
+
+	// Write the JSON to a file.
+	err = writeFile(filename, jsonOutput.Bytes())
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("Unable to write JSON file")
+		return err
+	}
+
+	return nil
+}
+
 func main() {
 	flag.BoolVar(&debug, "debug", false, "debug output.")
 	flag.Parse()
@@ -315,14 +369,6 @@ func main() {
 
 	var singularityConfig SingularityConfig
 	var err error
-
-	var requestJSON = new(bytes.Buffer)
-	var requestTemplate = template.New("Request template")
-	requestTemplate, err = requestTemplate.Parse(SingularityRequestTemplate)
-
-	var deployJSON = new(bytes.Buffer)
-	var deployTemplate = template.New("Deploy template")
-	deployTemplate, err = deployTemplate.Parse(SingularityDeployTemplate)
 
 	// Read in the YAML config file.
 	yamlFile := readFileOrDie("singularity.yml")
@@ -339,50 +385,16 @@ func main() {
 		"config": singularityConfig,
 	}).Debug("Unmarshalled config")
 
-	// Create the request JSON
-	err = requestTemplate.Execute(requestJSON, singularityConfig)
+	err = process(requestTemplate, singularityConfig, "sing-request.json")
 	if err != nil {
 		log.WithFields(log.Fields{
 			"error": err,
-		}).Info("Unable to generate the template cleanly")
+		}).Fatal("Unrecoverable error occurred")
 	}
-	log.WithFields(log.Fields{
-		"json": requestJSON.String(),
-	}).Debug("Request JSON")
-
-	// Create the deploy JSON.
-	err = deployTemplate.Execute(deployJSON, singularityConfig)
+	err = process(deployTemplate, singularityConfig, "sing-deploy.json")
 	if err != nil {
 		log.WithFields(log.Fields{
 			"error": err,
-		}).Info("Unable to generate the template cleanly")
+		}).Fatal("Unrecoverable error occurred")
 	}
-	log.WithFields(log.Fields{
-		"json": deployJSON.String(),
-	}).Debug("Deploy JSON")
-
-	// Check that the JSON is valid.
-	invalidJSON := false
-	err = checkJSON(requestJSON.Bytes())
-	if err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Error("Invalid request JSON")
-		invalidJSON = true
-	}
-	err = checkJSON(deployJSON.Bytes())
-	if err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Error("Invalid request JSON")
-		invalidJSON = true
-	}
-
-	if invalidJSON {
-		log.Fatal("Cannot continue until the JSON errors above are resolved.")
-	}
-
-	// Write the JSON to files.
-	writeFile("singularity-request.json", requestJSON.Bytes())
-	writeFile("singularity-deploy.json", deployJSON.Bytes())
 }
