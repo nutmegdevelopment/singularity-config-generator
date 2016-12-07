@@ -14,9 +14,11 @@ import (
 
 // SingularityConfig ...
 type SingularityConfig struct {
+	Command                               string
 	DeployID                              string `yaml:"deploy-id"`
-	KillOldNonLongRunningTasksAfterMillis int    `yaml:"kill-old-non-long-running-tasks-after-millis"`
-	NumRetriesOnFailure                   int    `yaml:"num-retries-on-failure"`
+	Env                                   []string
+	KillOldNonLongRunningTasksAfterMillis int `yaml:"kill-old-non-long-running-tasks-after-millis"`
+	NumRetriesOnFailure                   int `yaml:"num-retries-on-failure"`
 	Owners                                []string
 	RequestType                           string            `yaml:"request-type"`
 	RequiredSlaveAttributes               map[string]string `yaml:"required-slave-attributes"`
@@ -27,11 +29,16 @@ type SingularityConfig struct {
 	ContainerInfo                         struct {
 		Type   string
 		Docker struct {
-			Network string
-			Image   string
+			Network          string
+			Image            string
+			Privileged       bool
+			ForcePullImage   bool
+			Parameters       map[string]string
+			DockerParameters map[string]string
 		}
 	} `yaml:"container-info"`
 	Resources map[string]string
+	URIs      []string `yaml:"uris"`
 }
 
 // SingularityRequestTemplate ...
@@ -40,11 +47,20 @@ type SingularityConfig struct {
 const SingularityRequestTemplate = `
 {
     "requestType": "{{.RequestType -}}",
+	{{if .Schedule -}}
+		"schedule": "{{.Schedule -}}",
+	{{end}}
     {{.WriteOwners}}
-    "numRetriesOnFailure": {{.NumRetriesOnFailure}},
-    "killOldNonLongRunningTasksAfterMillis": {{.KillOldNonLongRunningTasksAfterMillis}},
+	{{if .NumRetriesOnFailure -}}
+    	"numRetriesOnFailure": {{.NumRetriesOnFailure}},
+	{{end}}
+	{{if .KillOldNonLongRunningTasksAfterMillis -}}
+    	"killOldNonLongRunningTasksAfterMillis": {{.KillOldNonLongRunningTasksAfterMillis}},
+	{{end}}
     {{.WriteRequiredSlaveAttributes}}
-    "scheduledExpectedRuntimeMillis": {{.ScheduledExpectedRuntimeMillis}},
+	{{if .ScheduledExpectedRuntimeMillis -}}
+    	"scheduledExpectedRuntimeMillis": {{.ScheduledExpectedRuntimeMillis}},
+	{{end}}
     "id": "{{.RequestID -}}"
 }
 `
@@ -56,13 +72,18 @@ const SingularityDeployTemplate = `
 {
     "deploy": {
         {{.WriteArguments}}
-        "containerInfo": {
-            "type": "DOCKER",
-            "docker": {
-                "network": "BRIDGE",
-                "image": "registry.nutmeg.co.uk:8443/marathon-lb-zdd:latest"
-            }
-        },
+		{{with .ContainerInfo}}
+			"containerInfo": {
+				"type": "{{.Type}}",
+				{{with .Docker -}}
+					"docker": {
+						"privileged": {{.Privileged}},
+						"network": "BRIDGE",
+						"image": "{{.Image}}",
+					}
+				{{end}}
+			},
+		{{end}}
         {{.WriteResources}}
         "requestId": "{{.RequestID}}",
         "id": "{{.DeployID}}"
