@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"text/template"
 
 	"strings"
@@ -236,6 +237,8 @@ func WriteSliceItems(s []string) string {
 	return out.String()
 }
 
+// makeStringJSONSafe escapes any double quotes (") that would break the generated
+// JSON output.
 func makeStringJSONSafe(s string) string {
 	s = strings.Replace(s, `"`, `\"`, -1)
 	return s
@@ -257,6 +260,27 @@ func readFileOrDie(filename string) []byte {
 		log.Fatalf("Unable to read file: %s. %s", filename, err)
 	}
 	return b
+}
+
+// Write a file to the local filesystem.  Return an error if unsuccessful.
+func writeFile(filename string, b []byte) error {
+	f, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+
+	defer f.Close()
+
+	out, err := f.Write(b)
+	if err != nil {
+		return err
+	}
+	log.WithFields(log.Fields{
+		"bytes":    out,
+		"filename": filename,
+	}).Info("File created")
+
+	return nil
 }
 
 func main() {
@@ -292,7 +316,7 @@ func main() {
 	}
 	log.WithFields(log.Fields{
 		"json": requestJSON.String(),
-	}).Info("Request JSON")
+	}).Debug("Request JSON")
 	err = deployTemplate.Execute(deployJSON, singularityConfig)
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -301,5 +325,8 @@ func main() {
 	}
 	log.WithFields(log.Fields{
 		"json": deployJSON.String(),
-	}).Info("Deploy JSON")
+	}).Debug("Deploy JSON")
+
+	writeFile("singularity-request.json", requestJSON.Bytes())
+	writeFile("singularity-deploy.json", deployJSON.Bytes())
 }
