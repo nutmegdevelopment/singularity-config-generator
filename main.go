@@ -211,13 +211,27 @@ func WriteSlice(key string, s []string) string {
 
 	out := new(bytes.Buffer)
 	out.WriteString(fmt.Sprintf(`"%s": [`, key))
+	out.WriteString(WriteSliceItems(s))
+	out.WriteString(`],`)
+
+	return out.String()
+}
+
+// WriteSliceItems loops over the entries in a alice and creates a JSON formatted
+// string - without the wrapping square brackets ('[' or ']').  If the slice is
+// empty then an empty string is returned.
+func WriteSliceItems(s []string) string {
+	if len(s) == 0 {
+		return ""
+	}
+
+	out := new(bytes.Buffer)
 	for index, value := range s {
 		if index > 0 {
 			out.WriteString(",")
 		}
 		out.WriteString(fmt.Sprintf(`"%s"`, makeStringJSONSafe(value)))
 	}
-	out.WriteString(`],`)
 
 	return out.String()
 }
