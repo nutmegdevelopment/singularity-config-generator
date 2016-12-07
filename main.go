@@ -15,8 +15,13 @@ import (
 	yaml "gopkg.in/yaml.v2"
 )
 
+const (
+	defaultConfigFile = "singularity.yml"
+)
+
 var (
 	debug           = false
+	configFile      string
 	deployTemplate  *template.Template
 	requestTemplate *template.Template
 	deployFilename  = "singularity-deploy.json"
@@ -365,33 +370,41 @@ func process(tmpl *template.Template, singularityConfig SingularityConfig, filen
 	return nil
 }
 
+func loadConfig() SingularityConfig {
+	var singularityConfig SingularityConfig
+
+	// Read in the YAML config file.
+	yamlFile := readFileOrDie(configFile)
+	log.WithFields(log.Fields{
+		"yaml": string(yamlFile),
+	}).Debug("Read YAML config file")
+
+	// Unmarshal the YAML config file.
+	err := yaml.Unmarshal(yamlFile, &singularityConfig)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"filename": configFile,
+		}).Fatal("Unable to unmarshal config file")
+	}
+	log.WithFields(log.Fields{
+		"config": singularityConfig,
+	}).Debug("Unmarshalled config")
+
+	return singularityConfig
+}
+
 func main() {
 	flag.BoolVar(&debug, "debug", false, "debug output.")
+	flag.StringVar(&configFile, "config-file", defaultConfigFile, "The name of the config file. Default: singularity.yml")
 	flag.Parse()
 
 	if debug {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	var singularityConfig SingularityConfig
-	var err error
+	singularityConfig := loadConfig()
 
-	// Read in the YAML config file.
-	yamlFile := readFileOrDie("singularity.yml")
-	log.WithFields(log.Fields{
-		"yaml": string(yamlFile),
-	}).Debug("Read YAML config file")
-
-	// Unmarshal the YAML config file.
-	err = yaml.Unmarshal(yamlFile, &singularityConfig)
-	if err != nil {
-		log.Fatal("Unable to unmarshal yaml file")
-	}
-	log.WithFields(log.Fields{
-		"config": singularityConfig,
-	}).Debug("Unmarshalled config")
-
-	err = process(requestTemplate, singularityConfig, requestFilename)
+	err := process(requestTemplate, singularityConfig, requestFilename)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"error":    err,
