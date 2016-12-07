@@ -34,7 +34,7 @@ type SingularityConfig struct {
 			Privileged       bool
 			ForcePullImage   bool
 			Parameters       map[string]string
-			DockerParameters map[string]string
+			DockerParameters []map[string]string `yaml:"dockerParameters"`
 		}
 	} `yaml:"container-info"`
 	Resources map[string]string
@@ -72,24 +72,48 @@ const SingularityDeployTemplate = `
 {
     "deploy": {
         {{.WriteArguments}}
-		{{with .ContainerInfo}}
 			"containerInfo": {
-				"type": "{{.Type}}",
-				{{with .Docker -}}
+				"type": "{{.ContainerInfo.Type}}",
 					"docker": {
-						"privileged": {{.Privileged}},
+						"privileged": {{.ContainerInfo.Docker.Privileged}},
 						"network": "BRIDGE",
-						"image": "{{.Image}}",
+						"image": "{{.ContainerInfo.Docker.Image}}",
+						{{.WriteParameters}}
+						{{.WriteDockerParameters}}
 					}
-				{{end}}
 			},
-		{{end}}
         {{.WriteResources}}
         "requestId": "{{.RequestID}}",
         "id": "{{.DeployID}}"
     }
 }
 `
+
+// const SingularityDeployTemplate = `
+// {
+//     "deploy": {
+//         {{.WriteArguments}}
+// 		{{with .ContainerInfo}}
+// 			"containerInfo": {
+// 				"type": "{{.Type}}",
+// 				{{with .Docker -}}
+// 					"docker": {
+// 						"privileged": {{.Privileged}},
+// 						"network": "BRIDGE",
+// 						"image": "{{.Image}}",
+
+// 							{{.WriteParameters}}
+// 						{{if .Parameters}}{{end}}
+// 					}
+// 				{{end}}
+// 			},
+// 		{{end}}
+//         {{.WriteResources}}
+//         "requestId": "{{.RequestID}}",
+//         "id": "{{.DeployID}}"
+//     }
+// }
+// `
 
 // WriteOwners ...
 func (s SingularityConfig) WriteOwners() string {
@@ -103,6 +127,30 @@ func (s SingularityConfig) WriteResources() string {
 
 }
 
+// WriteParameters ...
+func (s SingularityConfig) WriteParameters() string {
+	return WriteMap("parameters", s.ContainerInfo.Docker.Parameters)
+}
+
+// WriteDockerParameters ...
+func (s SingularityConfig) WriteDockerParameters() string {
+	if len(s.ContainerInfo.Docker.DockerParameters) == 0 {
+		return ""
+	}
+
+	r := new(bytes.Buffer)
+	r.WriteString(`"dockerParameters": [{`)
+	for i := range s.ContainerInfo.Docker.DockerParameters {
+		if i > 0 {
+			r.WriteString("},{")
+		}
+		r.WriteString(WriteMapItems(s.ContainerInfo.Docker.DockerParameters[i]))
+	}
+	r.WriteString(`}]`)
+
+	return r.String()
+}
+
 // WriteRequiredSlaveAttributes ...
 func (s SingularityConfig) WriteRequiredSlaveAttributes() string {
 	return WriteMap("requiredSlaveAttributes", s.RequiredSlaveAttributes)
@@ -112,6 +160,8 @@ func (s SingularityConfig) WriteRequiredSlaveAttributes() string {
 // WriteMap loops over the entries in a map and creates a JSON formatted
 // string - with trailing comma ",".  If the map is empty then an empty
 // string is returned.
+// Otherwise a complete JSON entry is returned, like:
+//   "key": {"key1":"value1","key2","value2"},
 func WriteMap(key string, m map[string]string) string {
 	if len(m) == 0 {
 		return ""
@@ -119,6 +169,20 @@ func WriteMap(key string, m map[string]string) string {
 
 	out := new(bytes.Buffer)
 	out.WriteString(fmt.Sprintf(`"%s": {`, key))
+	out.WriteString(WriteMapItems(m))
+	out.WriteString(`},`)
+
+	return out.String()
+}
+
+// WriteMapItems ...
+func WriteMapItems(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+
+	out := new(bytes.Buffer)
+
 	mapIndex := 0
 	for key, value := range m {
 		if mapIndex > 0 {
@@ -127,7 +191,6 @@ func WriteMap(key string, m map[string]string) string {
 		out.WriteString(fmt.Sprintf(`"%s":"%s"`, key, makeStringJSONSafe(value)))
 		mapIndex++
 	}
-	out.WriteString(`},`)
 
 	return out.String()
 }
@@ -207,11 +270,21 @@ func main() {
 		"config": singularityConfig,
 	}).Debug("Unmarshalled config")
 
-	requestTemplate.Execute(requestJSON, singularityConfig)
+	err = requestTemplate.Execute(requestJSON, singularityConfig)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Info("Unable to generate the template cleanly")
+	}
 	log.WithFields(log.Fields{
 		"json": requestJSON.String(),
 	}).Info("Request JSON")
-	deployTemplate.Execute(deployJSON, singularityConfig)
+	err = deployTemplate.Execute(deployJSON, singularityConfig)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Info("Unable to generate the template cleanly")
+	}
 	log.WithFields(log.Fields{
 		"json": deployJSON.String(),
 	}).Info("Deploy JSON")
