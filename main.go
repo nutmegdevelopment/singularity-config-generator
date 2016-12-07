@@ -19,6 +19,8 @@ var (
 	debug           = false
 	deployTemplate  *template.Template
 	requestTemplate *template.Template
+	deployFilename  = "singularity-deploy.json"
+	requestFilename = "singularity-request.json"
 )
 
 // SingularityConfig ...
@@ -323,6 +325,10 @@ func init() {
 	}
 }
 
+// process performs three functions:
+// 1, generates JSON from the provided template and SingularityConfig instance.
+// 2, checks that the generated JSON is valid JSON.
+// 3, writes the JSON to a local file.
 func process(tmpl *template.Template, singularityConfig SingularityConfig, filename string) error {
 	var jsonOutput = new(bytes.Buffer)
 
@@ -385,16 +391,18 @@ func main() {
 		"config": singularityConfig,
 	}).Debug("Unmarshalled config")
 
-	err = process(requestTemplate, singularityConfig, "sing-request.json")
+	err = process(requestTemplate, singularityConfig, requestFilename)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"error": err,
+			"error":    err,
+			"filename": requestFilename,
 		}).Fatal("Unrecoverable error occurred")
 	}
-	err = process(deployTemplate, singularityConfig, "sing-deploy.json")
+	err = process(deployTemplate, singularityConfig, deployFilename)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"error": err,
+			"error":    err,
+			"filename": deployFilename,
 		}).Fatal("Unrecoverable error occurred")
 	}
 }
