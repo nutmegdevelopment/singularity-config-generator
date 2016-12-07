@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -283,6 +284,20 @@ func writeFile(filename string, b []byte) error {
 	return nil
 }
 
+func checkJSON(b []byte) error {
+	var iface interface{}
+	err := json.Unmarshal(b, &iface)
+	if err != nil {
+		return err
+	}
+
+	log.WithFields(log.Fields{
+		"json": string(b),
+	}).Debug("JSON is valid")
+
+	return nil
+}
+
 func main() {
 	var singularityConfig SingularityConfig
 	var err error
@@ -295,11 +310,13 @@ func main() {
 	var deployTemplate = template.New("Deploy template")
 	deployTemplate, err = deployTemplate.Parse(SingularityDeployTemplate)
 
+	// Read in the YAML config file.
 	yamlFile := readFileOrDie("singularity.yml")
 	log.WithFields(log.Fields{
 		"yaml": string(yamlFile),
 	}).Debug("Read YAML config file")
 
+	// Unmarshal the YAML config file.
 	err = yaml.Unmarshal(yamlFile, &singularityConfig)
 	if err != nil {
 		log.Fatal("Unable to unmarshal yaml file")
@@ -308,6 +325,7 @@ func main() {
 		"config": singularityConfig,
 	}).Debug("Unmarshalled config")
 
+	// Create the request JSON
 	err = requestTemplate.Execute(requestJSON, singularityConfig)
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -317,6 +335,8 @@ func main() {
 	log.WithFields(log.Fields{
 		"json": requestJSON.String(),
 	}).Debug("Request JSON")
+
+	// Create the deploy JSON.
 	err = deployTemplate.Execute(deployJSON, singularityConfig)
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -327,6 +347,28 @@ func main() {
 		"json": deployJSON.String(),
 	}).Debug("Deploy JSON")
 
+	// Check that the JSON is valid.
+	invalidJSON := false
+	err = checkJSON(requestJSON.Bytes())
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("Invalid request JSON")
+		invalidJSON = true
+	}
+	err = checkJSON(deployJSON.Bytes())
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("Invalid request JSON")
+		invalidJSON = true
+	}
+
+	if invalidJSON {
+		log.Fatal("Cannot continue until the JSON errors above are resolved.")
+	}
+
+	// Write the JSON to files.
 	writeFile("singularity-request.json", requestJSON.Bytes())
 	writeFile("singularity-deploy.json", deployJSON.Bytes())
 }
