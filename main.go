@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -12,6 +13,10 @@ import (
 
 	log "github.com/Sirupsen/logrus"
 	yaml "gopkg.in/yaml.v2"
+)
+
+var (
+	debug = false
 )
 
 // SingularityConfig ...
@@ -284,6 +289,8 @@ func writeFile(filename string, b []byte) error {
 	return nil
 }
 
+// checkJSON tries to unmarshal the provided JSON into an interface{} - if
+// not successful then the generated error is returned.
 func checkJSON(b []byte) error {
 	var iface interface{}
 	err := json.Unmarshal(b, &iface)
@@ -299,6 +306,13 @@ func checkJSON(b []byte) error {
 }
 
 func main() {
+	flag.BoolVar(&debug, "debug", false, "debug output.")
+	flag.Parse()
+
+	if debug {
+		log.SetLevel(log.DebugLevel)
+	}
+
 	var singularityConfig SingularityConfig
 	var err error
 
