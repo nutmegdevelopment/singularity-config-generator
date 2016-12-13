@@ -26,6 +26,7 @@ var (
 	requestTemplate *template.Template
 	deployFilename  = "singularity-deploy.json"
 	requestFilename = "singularity-request.json"
+	replacementVars = make(stringmap)
 )
 
 // SingularityConfig ...
@@ -379,6 +380,8 @@ func loadConfig() SingularityConfig {
 		"yaml": string(yamlFile),
 	}).Debug("Read YAML config file")
 
+	yamlFile = replacePlaceholders(yamlFile, replacementVars)
+
 	// Unmarshal the YAML config file.
 	err := yaml.Unmarshal(yamlFile, &singularityConfig)
 	if err != nil {
@@ -393,9 +396,23 @@ func loadConfig() SingularityConfig {
 	return singularityConfig
 }
 
+// Apply any replacement vars.
+func replacePlaceholders(configFile []byte, replacements map[string]string) []byte {
+	s := string(configFile)
+	for k, v := range replacements {
+		//if verbose {
+		log.Printf("Replacing '{{%s}}' with '%s'", k, v)
+		//}
+		k = fmt.Sprintf("{{%s}}", k)
+		s = strings.Replace(s, k, v, -1)
+	}
+	return []byte(s)
+}
+
 func main() {
 	flag.BoolVar(&debug, "debug", false, "debug output.")
 	flag.StringVar(&configFile, "config-file", defaultConfigFile, "The name of the config file. Default: singularity.yml")
+	flag.Var(&replacementVars, "var", "[] of replacement variables in the form of: key=value - multiple -var flags can be used, one per key/value pair.")
 	flag.Parse()
 
 	if debug {
