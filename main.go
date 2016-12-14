@@ -16,7 +16,13 @@ import (
 )
 
 const (
-	defaultConfigFile = "singularity.yml"
+	defaultConfigFile                            = "singularity.yml"
+	scheduledExpectedRuntimeMillisDefault        = 360000
+	killOldNonLongRunningTasksAfterMillisDefault = 10000
+
+	// Default output file names.
+	deployFilename  = "singularity-deploy.json"
+	requestFilename = "singularity-request.json"
 )
 
 var (
@@ -24,18 +30,16 @@ var (
 	configFile      string
 	deployTemplate  *template.Template
 	requestTemplate *template.Template
-	deployFilename  = "singularity-deploy.json"
-	requestFilename = "singularity-request.json"
 	replacementVars = make(stringmap)
 )
 
 // SingularityConfig ...
 type SingularityConfig struct {
 	Command                               string
-	DeployID                              string `yaml:"deploy-id"`
-	Env                                   []string
-	KillOldNonLongRunningTasksAfterMillis int `yaml:"kill-old-non-long-running-tasks-after-millis"`
-	NumRetriesOnFailure                   int `yaml:"num-retries-on-failure"`
+	DeployID                              string            `yaml:"deploy-id"`
+	Env                                   map[string]string `yaml:"env,omitempty"`
+	KillOldNonLongRunningTasksAfterMillis int               `yaml:"kill-old-non-long-running-tasks-after-millis"`
+	NumRetriesOnFailure                   int               `yaml:"num-retries-on-failure"`
 	Owners                                []string
 	RequestType                           string            `yaml:"request-type"`
 	RequiredSlaveAttributes               map[string]string `yaml:"required-slave-attributes"`
@@ -43,19 +47,53 @@ type SingularityConfig struct {
 	ScheduledExpectedRuntimeMillis        int    `yaml:"scheduled-expected-runtime-millis"`
 	RequestID                             string `yaml:"request-id"`
 	Arguments                             []string
-	ContainerInfo                         struct {
-		Type   string
-		Docker struct {
-			Network          string
-			Image            string
-			Privileged       bool
-			ForcePullImage   bool
-			Parameters       map[string]string
-			DockerParameters []map[string]string `yaml:"dockerParameters"`
-		}
-	} `yaml:"container-info"`
-	Resources map[string]string
-	URIs      []string `yaml:"uris"`
+	ContainerInfo                         SingularityContainerInfo `yaml:"container-info,omitempty"`
+	Resources                             struct {
+		NumPorts int     `yaml:"num-ports" json:"numPorts,omitempty"`
+		MemoryMb float64 `yaml:"memory-mb" json:"memoryMb,omitempty"`
+		CPUs     float64 `yaml:"cpus" json:"cpus,omitempty"`
+		DiskMb   float64 `yaml:"disk-mb" json:"diskMb,omitempty"`
+	} `json:"resources"`
+	URIs []string `yaml:"uris"`
+}
+
+// SingularityPortMapping - see:
+// https://github.com/HubSpot/Singularity/blob/master/Docs/reference/api.md#model-SingularityPortMapping
+type SingularityPortMapping struct {
+	HostPort          int                        `yaml:"hostPort" json:"hostPort"`
+	ContainerPort     int                        `yaml:"containerPort" json:"containerPort" json:"containerPort"`
+	ContainerPortType SingularityPortMappingType `yaml:"containerPortType,omitempty" json:"containerPortType,omitempty"`
+	Protocol          string                     `yaml:"protocol,omitempty" json:"protocol,omitempty"`
+	HostPortType      SingularityPortMappingType `yaml:"hostPortType,omitempty" json:"hostPortType,omitempty"`
+}
+
+// SingularityPortMappingType - see:
+// https://github.com/HubSpot/Singularity/blob/master/Docs/reference/api.md#model-SingularityPortMappingType
+type SingularityPortMappingType struct {
+}
+
+// SingularityVolume - see:
+// https://github.com/HubSpot/Singularity/blob/master/Docs/reference/api.md#model-SingularityVolume
+type SingularityVolume struct {
+	HostPath      string `json:"hostPath,omitempty"`
+	ContainerPath string `json:"containerPath,omitempty"`
+	Mode          string `json:"mode,omitempty"`
+}
+
+// Init ...
+func (s *SingularityConfig) Init() {
+	// Initialize fields that you do NOT want to have 'null' values,
+	// like slices where you want to see '[]' in the JSON when it is
+	// empty.
+	s.ContainerInfo.Volumes = make([]SingularityVolume, 0)
+
+	// Set any default values.
+	if s.ScheduledExpectedRuntimeMillis == 0 {
+		s.ScheduledExpectedRuntimeMillis = scheduledExpectedRuntimeMillisDefault
+	}
+	if s.KillOldNonLongRunningTasksAfterMillis == 0 {
+		s.KillOldNonLongRunningTasksAfterMillis = killOldNonLongRunningTasksAfterMillisDefault
+	}
 }
 
 // SingularityRequestTemplate ...
@@ -63,21 +101,13 @@ type SingularityConfig struct {
 // elements can add a trailing comma "," if they exist.
 const SingularityRequestTemplate = `
 {
-    "requestType": "{{.RequestType -}}",
-	{{if .Schedule -}}
-		"schedule": "{{.Schedule -}}",
-	{{end}}
-    {{.WriteOwners}}
-	{{if .NumRetriesOnFailure -}}
-    	"numRetriesOnFailure": {{.NumRetriesOnFailure}},
-	{{end}}
-	{{if .KillOldNonLongRunningTasksAfterMillis -}}
-    	"killOldNonLongRunningTasksAfterMillis": {{.KillOldNonLongRunningTasksAfterMillis}},
-	{{end}}
-    {{.WriteRequiredSlaveAttributes}}
-	{{if .ScheduledExpectedRuntimeMillis -}}
-    	"scheduledExpectedRuntimeMillis": {{.ScheduledExpectedRuntimeMillis}},
-	{{end}}
+    {{.WriteOwners -}}
+	{{.WriteRequiredSlaveAttributes -}}
+	{{.WriteSchedule -}}
+	"killOldNonLongRunningTasksAfterMillis": {{.KillOldNonLongRunningTasksAfterMillis}},
+	"numRetriesOnFailure": {{.NumRetriesOnFailure}},
+	"requestType": "{{.RequestType -}}",
+    "scheduledExpectedRuntimeMillis": {{.ScheduledExpectedRuntimeMillis}},
     "id": "{{.RequestID -}}"
 }
 `
@@ -89,16 +119,8 @@ const SingularityDeployTemplate = `
 {
     "deploy": {
         {{.WriteArguments}}
-			"containerInfo": {
-				"type": "{{.ContainerInfo.Type}}",
-					"docker": {
-						"privileged": {{.ContainerInfo.Docker.Privileged}},
-						"network": "BRIDGE",
-						"image": "{{.ContainerInfo.Docker.Image}}",
-						{{.WriteParameters}}
-						{{.WriteDockerParameters}}
-					}
-			},
+		{{.WriteContainerInfo}}
+		{{.WriteEnv}}
         {{.WriteResources}}
         "requestId": "{{.RequestID}}",
         "id": "{{.DeployID}}"
@@ -106,158 +128,100 @@ const SingularityDeployTemplate = `
 }
 `
 
-// const SingularityDeployTemplate = `
-// {
-//     "deploy": {
-//         {{.WriteArguments}}
-// 		{{with .ContainerInfo}}
-// 			"containerInfo": {
-// 				"type": "{{.Type}}",
-// 				{{with .Docker -}}
-// 					"docker": {
-// 						"privileged": {{.Privileged}},
-// 						"network": "BRIDGE",
-// 						"image": "{{.Image}}",
-
-// 							{{.WriteParameters}}
-// 						{{if .Parameters}}{{end}}
-// 					}
-// 				{{end}}
-// 			},
-// 		{{end}}
-//         {{.WriteResources}}
-//         "requestId": "{{.RequestID}}",
-//         "id": "{{.DeployID}}"
-//     }
-// }
-// `
-
-// WriteOwners ...
-func (s SingularityConfig) WriteOwners() string {
-	return WriteSlice("owners", s.Owners)
-
+// SingularityContainerInfo - see:
+// https://github.com/HubSpot/Singularity/blob/master/Docs/reference/api.md#model-SingularityContainerInfo
+type SingularityContainerInfo struct {
+	Docker  SingularityDockerInfo `json:"docker"`
+	Type    string                `json:"type"`
+	Volumes []SingularityVolume   `yaml:"volumes,omitempty" json:"volumes,omitempty"`
 }
 
-// WriteResources ...
-func (s SingularityConfig) WriteResources() string {
-	return WriteMap("resources", s.Resources)
-
+// SingularityDockerInfo - see:
+// https://github.com/HubSpot/Singularity/blob/master/Docs/reference/api.md#model-SingularityDockerInfo
+type SingularityDockerInfo struct {
+	ForcePullImage   bool                     `json:"forcePullImage,omitempty"`
+	Privileged       bool                     `json:"privileged"`
+	Network          string                   `json:"network"`
+	Image            string                   `json:"image"`
+	Parameters       map[string]string        `json:"parameters,omitempty"`
+	DockerParameters []map[string]string      `yaml:"dockerParameters,omitempty" json:"dockerParameters,omitempty"`
+	PortMappings     []SingularityPortMapping `yaml:"portMappings,omitempty" json:"portMappings,omitempty"`
 }
 
-// WriteParameters ...
-func (s SingularityConfig) WriteParameters() string {
-	return WriteMap("parameters", s.ContainerInfo.Docker.Parameters)
-}
-
-// WriteDockerParameters ...
-func (s SingularityConfig) WriteDockerParameters() string {
-	if len(s.ContainerInfo.Docker.DockerParameters) == 0 {
+// WriteContainerInfo handles adding a containerInfo section if one is
+// required.  Internal sections are only added if they are needed to avoid
+// having null values.
+func (s SingularityConfig) WriteContainerInfo() string {
+	if s.ContainerInfo.Type == "" {
 		return ""
 	}
 
-	r := new(bytes.Buffer)
-	r.WriteString(`"dockerParameters": [{`)
-	for i := range s.ContainerInfo.Docker.DockerParameters {
-		if i > 0 {
-			r.WriteString("},{")
-		}
-		r.WriteString(WriteMapItems(s.ContainerInfo.Docker.DockerParameters[i]))
-	}
-	r.WriteString(`}]`)
+	return marshalJSON("containerInfo", s.ContainerInfo)
+}
 
-	return r.String()
+// marshalJSON takes an element name and an interface.  The interface is
+// marshalled into a JSON string and appended to the element name to
+// create a "key": "value", pair.
+// A trailing comma is always added as elements written using this method
+// are not expected to be the last elements in the JSON object (the 'id'
+// element is always last to allow trailing commas to now break the JSON).
+func marshalJSON(elementName string, i interface{}) string {
+	j, err := json.Marshal(i)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+			"data":  fmt.Sprintf("%+v", i),
+		}).Error("Error marshalling to json string")
+	}
+
+	return fmt.Sprintf(`"%s": %s,`, elementName, string(j))
+}
+
+// WriteOwners ...
+func (s SingularityConfig) WriteOwners() string {
+	if len(s.Owners) == 0 {
+		return ""
+	}
+
+	return marshalJSON("owners", s.Owners)
+}
+
+// WriteResources is a map with
+func (s SingularityConfig) WriteResources() string {
+	return marshalJSON("resources", s.Resources)
+}
+
+// WriteSchedule ...
+func (s SingularityConfig) WriteSchedule() string {
+	if s.Schedule == "" {
+		return ""
+	}
+	return marshalJSON("schedule", s.Schedule)
+}
+
+// WriteEnv ...
+func (s SingularityConfig) WriteEnv() string {
+	if len(s.Env) == 0 {
+		return ""
+	}
+	return marshalJSON("env", s.Env)
 }
 
 // WriteRequiredSlaveAttributes ...
 func (s SingularityConfig) WriteRequiredSlaveAttributes() string {
-	return WriteMap("requiredSlaveAttributes", s.RequiredSlaveAttributes)
-
-}
-
-// WriteMap loops over the entries in a map and creates a JSON formatted
-// string - with trailing comma ",".  If the map is empty then an empty
-// string is returned.
-// Otherwise a complete JSON entry is returned, like:
-//   "key": {"key1":"value1","key2","value2"},
-func WriteMap(key string, m map[string]string) string {
-	if len(m) == 0 {
+	if s.RequiredSlaveAttributes == nil {
 		return ""
 	}
+	return marshalJSON("requiredSlaveAttributes", s.RequiredSlaveAttributes)
 
-	out := new(bytes.Buffer)
-	out.WriteString(fmt.Sprintf(`"%s": {`, key))
-	out.WriteString(WriteMapItems(m))
-	out.WriteString(`},`)
-
-	return out.String()
-}
-
-// WriteMapItems ...
-func WriteMapItems(m map[string]string) string {
-	if len(m) == 0 {
-		return ""
-	}
-
-	out := new(bytes.Buffer)
-
-	mapIndex := 0
-	for key, value := range m {
-		if mapIndex > 0 {
-			out.WriteString(",")
-		}
-		out.WriteString(fmt.Sprintf(`"%s":"%s"`, key, makeStringJSONSafe(value)))
-		mapIndex++
-	}
-
-	return out.String()
 }
 
 // WriteArguments ...
 func (s SingularityConfig) WriteArguments() string {
-	return WriteSlice("arguments", s.Arguments)
-
-}
-
-// WriteSlice loops over the entries in a alice and creates a JSON formatted
-// string - with trailing comma ",".  If the slice is empty then an empty
-// string is returned.
-func WriteSlice(key string, s []string) string {
-	if len(s) == 0 {
+	if len(s.Arguments) == 0 {
 		return ""
 	}
-
-	out := new(bytes.Buffer)
-	out.WriteString(fmt.Sprintf(`"%s": [`, key))
-	out.WriteString(WriteSliceItems(s))
-	out.WriteString(`],`)
-
-	return out.String()
-}
-
-// WriteSliceItems loops over the entries in a alice and creates a JSON formatted
-// string - without the wrapping square brackets ('[' or ']').  If the slice is
-// empty then an empty string is returned.
-func WriteSliceItems(s []string) string {
-	if len(s) == 0 {
-		return ""
-	}
-
-	out := new(bytes.Buffer)
-	for index, value := range s {
-		if index > 0 {
-			out.WriteString(",")
-		}
-		out.WriteString(fmt.Sprintf(`"%s"`, makeStringJSONSafe(value)))
-	}
-
-	return out.String()
-}
-
-// makeStringJSONSafe escapes any double quotes (") that would break the generated
-// JSON output.
-func makeStringJSONSafe(s string) string {
-	s = strings.Replace(s, `"`, `\"`, -1)
-	return s
+	return marshalJSON("arguments", s.Arguments)
 }
 
 // Read in a file.
@@ -355,6 +319,7 @@ func process(tmpl *template.Template, singularityConfig SingularityConfig, filen
 	if err != nil {
 		log.WithFields(log.Fields{
 			"error": err,
+			"json":  jsonOutput.String(),
 		}).Error("Invalid request JSON")
 		return err
 	}
@@ -373,6 +338,7 @@ func process(tmpl *template.Template, singularityConfig SingularityConfig, filen
 
 func loadConfig() SingularityConfig {
 	var singularityConfig SingularityConfig
+	singularityConfig.Init()
 
 	// Read in the YAML config file.
 	yamlFile := readFileOrDie(configFile)
@@ -405,7 +371,9 @@ func loadConfig() SingularityConfig {
 func replacePlaceholders(configFile []byte, replacements map[string]string) []byte {
 	s := string(configFile)
 	for key, value := range replacements {
-		log.Printf("Replacing '{{%s}}' with '%s'", key, value)
+		if debug {
+			log.Printf("Replacing '{{%s}}' with '%s'", key, value)
+		}
 		key = fmt.Sprintf("{{%s}}", key)
 		s = strings.Replace(s, key, value, -1)
 	}
