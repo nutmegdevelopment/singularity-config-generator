@@ -380,13 +380,18 @@ func loadConfig() SingularityConfig {
 		"yaml": string(yamlFile),
 	}).Debug("Read YAML config file")
 
-	yamlFile = replacePlaceholders(yamlFile, replacementVars)
+	if len(replacementVars) > 0 {
+		yamlFile = replacePlaceholders(yamlFile, replacementVars)
+	}
 
 	// Unmarshal the YAML config file.
 	err := yaml.Unmarshal(yamlFile, &singularityConfig)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"filename": configFile,
+			"filename":                configFile,
+			"error":                   err,
+			"message":                 "Check that all expected replacements have been correctly applied",
+			"yaml-after-replacements": string(yamlFile),
 		}).Fatal("Unable to unmarshal config file")
 	}
 	log.WithFields(log.Fields{
@@ -399,12 +404,10 @@ func loadConfig() SingularityConfig {
 // Apply any replacement vars.
 func replacePlaceholders(configFile []byte, replacements map[string]string) []byte {
 	s := string(configFile)
-	for k, v := range replacements {
-		//if verbose {
-		log.Printf("Replacing '{{%s}}' with '%s'", k, v)
-		//}
-		k = fmt.Sprintf("{{%s}}", k)
-		s = strings.Replace(s, k, v, -1)
+	for key, value := range replacements {
+		log.Printf("Replacing '{{%s}}' with '%s'", key, value)
+		key = fmt.Sprintf("{{%s}}", key)
+		s = strings.Replace(s, key, value, -1)
 	}
 	return []byte(s)
 }
