@@ -1,4 +1,4 @@
-package main
+package main // import "github.com/nutmegdevelopment/singularity-config-generator"
 
 import (
 	"bytes"
@@ -133,7 +133,7 @@ const SingularityDeployTemplate = `
 type SingularityContainerInfo struct {
 	Docker  SingularityDockerInfo `json:"docker"`
 	Type    string                `json:"type"`
-	Volumes []SingularityVolume   `yaml:"volumes,omitempty" json:"volumes,omitempty"`
+	Volumes []SingularityVolume   `json:"volumes,omitempty"`
 }
 
 // SingularityDockerInfo - see:
@@ -368,6 +368,8 @@ func loadConfig() SingularityConfig {
 }
 
 // Apply any replacement vars.
+// Passed through as -var key=value
+// In the config file {{key}} placeholder expected.
 func replacePlaceholders(configFile []byte, replacements map[string]string) []byte {
 	s := string(configFile)
 	for key, value := range replacements {
@@ -382,7 +384,7 @@ func replacePlaceholders(configFile []byte, replacements map[string]string) []by
 
 func main() {
 	flag.BoolVar(&debug, "debug", false, "debug output.")
-	flag.StringVar(&configFile, "config-file", defaultConfigFile, "The name of the config file. Default: singularity.yml")
+	flag.StringVar(&configFile, "config-file", defaultConfigFile, "The name of the config file")
 	flag.Var(&replacementVars, "var", "[] of replacement variables in the form of: key=value - multiple -var flags can be used, one per key/value pair.")
 	flag.Parse()
 
@@ -397,13 +399,14 @@ func main() {
 		log.WithFields(log.Fields{
 			"error":    err,
 			"filename": requestFilename,
-		}).Fatal("Unrecoverable error occurred")
+		}).Fatal("Unrecoverable error occurred processing request")
 	}
+
 	err = process(deployTemplate, singularityConfig, deployFilename)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"error":    err,
 			"filename": deployFilename,
-		}).Fatal("Unrecoverable error occurred")
+		}).Fatal("Unrecoverable error occurred processing deploy")
 	}
 }
