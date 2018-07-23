@@ -9,8 +9,6 @@ import (
 	"os"
 	"text/template"
 
-	"strings"
-
 	log "github.com/Sirupsen/logrus"
 	yaml "gopkg.in/yaml.v2"
 )
@@ -30,8 +28,11 @@ var (
 	configFile      string
 	deployTemplate  *template.Template
 	requestTemplate *template.Template
-	replacementVars = make(stringmap)
+	commandLineVars = make(stringmap)
 )
+
+// SingularityConfigData is used to store the config yaml template data
+type SingularityConfigData map[string]interface{}
 
 // SingularityConfig ...
 type SingularityConfig struct {
@@ -340,24 +341,40 @@ func loadConfig() SingularityConfig {
 	var singularityConfig SingularityConfig
 	singularityConfig.Init()
 
-	// Read in the YAML config file.
-	yamlFile := readFileOrDie(configFile)
-	log.WithFields(log.Fields{
-		"yaml": string(yamlFile),
-	}).Debug("Read YAML config file")
-
-	if len(replacementVars) > 0 {
-		yamlFile = replacePlaceholders(yamlFile, replacementVars)
-	}
-
-	// Unmarshal the YAML config file.
-	err := yaml.Unmarshal(yamlFile, &singularityConfig)
+	// Load the config through the go templating engine
+	configTemplate, err := template.ParseFiles(configFile)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"filename":                configFile,
-			"error":                   err,
-			"message":                 "Check that all expected replacements have been correctly applied",
-			"yaml-after-replacements": string(yamlFile),
+			"error": err,
+		}).Fatal("Unable to parse the config file (go template)")
+	}
+
+	// Load vars from the command line
+	var singularityConfigData SingularityConfigData
+	for k, v := range commandLineVars {
+		singularityConfigData[k] = v
+	}
+
+	// Exexute the template with the provided vars
+	var rawConfig = new(bytes.Buffer)
+	err = configTemplate.Execute(rawConfig, singularityConfigData)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Fatal("Failed to execute config template")
+	}
+	log.WithFields(log.Fields{
+		"templateResult": rawConfig,
+	}).Debug("Templated the config file")
+
+	// Unmarshal the templated YAML config.
+	err = yaml.Unmarshal(rawConfig.Bytes(), &singularityConfig)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"filename":              configFile,
+			"error":                 err,
+			"message":               "Check that all expected replacements have been correctly applied",
+			"yaml-after-templating": rawConfig.String(),
 		}).Fatal("Unable to unmarshal config file")
 	}
 	log.WithFields(log.Fields{
@@ -367,25 +384,10 @@ func loadConfig() SingularityConfig {
 	return singularityConfig
 }
 
-// Apply any replacement vars.
-// Passed through as -var key=value
-// In the config file {{key}} placeholder expected.
-func replacePlaceholders(configFile []byte, replacements map[string]string) []byte {
-	s := string(configFile)
-	for key, value := range replacements {
-		if debug {
-			log.Printf("Replacing '{{%s}}' with '%s'", key, value)
-		}
-		key = fmt.Sprintf("{{%s}}", key)
-		s = strings.Replace(s, key, value, -1)
-	}
-	return []byte(s)
-}
-
 func main() {
 	flag.BoolVar(&debug, "debug", false, "debug output.")
 	flag.StringVar(&configFile, "config-file", defaultConfigFile, "The name of the config file")
-	flag.Var(&replacementVars, "var", "[] of replacement variables in the form of: key=value - multiple -var flags can be used, one per key/value pair.")
+	flag.Var(&commandLineVars, "var", "[] of variables in the form of: key=value - multiple -var flags can be used, one per key/value pair.")
 	flag.Parse()
 
 	if debug {
