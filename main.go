@@ -31,9 +31,6 @@ var (
 	commandLineVars = make(stringmap)
 )
 
-// SingularityConfigData is used to store the config yaml template data
-type SingularityConfigData map[string]interface{}
-
 // SingularityConfig ...
 type SingularityConfig struct {
 	Command                               string
@@ -350,7 +347,7 @@ func loadConfig() SingularityConfig {
 	}
 
 	// Load vars from the command line
-	var singularityConfigData SingularityConfigData
+	singularityConfigData := make(map[string]string)
 	for k, v := range commandLineVars {
 		singularityConfigData[k] = v
 	}
